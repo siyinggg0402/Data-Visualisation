@@ -1,0 +1,472 @@
+---
+title: "DSA2101 Group Project - UN Votes"
+author: ""
+date: "`r Sys.Date()`"
+output: github_document
+---
+
+```{r setup, include = FALSE}
+# Global options for the RMarkdown document
+knitr::opts_chunk$set(include = TRUE,
+                      message = FALSE, warning = FALSE, 
+                      fig.align = "center",  out.width = "80%")
+```
+
+
+```{r, echo = FALSE}
+library(knitr)
+students <- data.frame(
+  Group_Members = c("Amelia Lon Hwee Min", "Cher Chu Ting", "Kuah Si Ying", "Woo Wan Rou Whitney"),
+  Matriculation_Number = c("A0282291A", "A0283139Y", "A0282158Y", "A0286527R")
+)
+
+kable(students, col.names = c("Names", "Matriculation Number"))
+```
+
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(forcats)
+library(countrycode)
+library(lubridate)
+library(ggplot2)
+library(rnaturalearth)
+library(sf)
+library(ggridges)
+library(extrafont)
+
+```
+
+
+# Loading the UN Votes Dataset
+
+```{r}
+unvotes <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2021/2021-03-23/unvotes.csv')
+roll_calls <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2021/2021-03-23/roll_calls.csv')
+issues <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2021/2021-03-23/issues.csv')
+```
+
+
+
+# 1. Introduction
+
+The UN Votes dataset from the TidyTuesday project provides detailed information on how countries voted in the United Nations General Assembly. It is made up of three key components: unvotes, which records individual country votes based on resolution; issues, which categorizes each resolution by topic such as human rights, nuclear weapons, or economic development; and roll_calls, which contains metadata including the resolution description, date, and session number. Together, we will be using these datasets for in-depth analysis of international voting behaviour, patterns in foreign policy, and how different countries align on global issues over time.
+
+
+## Brief description of the dataset
+
+**`unvotes`** ~ UN votes of each individual country based on `rcid` 
+
+**`issues`** ~ Issues based on `rcid` 
+
+**`roll_calls`** ~ *metadata* for resolution description date, and session number
+
+
+* Download dataset from: https://github.com/rfordatascience/tidytuesday/blob/main/data/2021/2021-03-23/readme.md
+
+
+
+For our project, we aim to answer the following question:
+
+```bash
+"What insights can be uncovered from voting patterns in the UN General Assembly across countries, time periods, and vital issues?"
+```
+
+This projects aims to identify trends in voting, understanding the trends of votes behind each issue, across countries and over different time periods. We hope to get more insights into the reasons behind the votes. We are also interested in identifying both long-term trends and unexpected deviations. For example, any sudden shifts in voting that may correspond to real-world political events, changes in leadership, or evolving international policies. Through data visualisation and trend analysis, we also aim to highlight similarities and differences among countries’ voting behaviour, which may provide further insights into diplomatic alignments and tensions.
+
+
+# 2. Data Cleaning
+
+The table shows the variables that we have decided to make use of for our visualisations and evaluations. These variables aim to help us understand the trends behind the UN votes.
+
+```{r, echo = FALSE}
+track_attributes <- data.frame(
+  Variable = c(
+    "rcid", "country","vote","year","issue"
+  ),
+  Class = c(
+    "double", "character", "factor", "double", "factor"
+  ),
+  Description = c(
+    "Resolution ID","Country casting the vote","Type of vote (yes, no, abstain)","Date of the vote","Category of the resolution topic"
+  )
+)
+kable(track_attributes, col.names = c("Variable", "Class", "Description"), align = "l")
+```
+
+## Clean `unvotes`
+
+We first cleaned the `unvotes` dataset, by changing the vote column to categorical, which includes votes of "yes", "no" and "abstain". This helps us to better visualise the information thereafter.  We also omitted any duplicates to ensure consistencies in the datasets, for more accurate representations of the data. 
+
+
+```{r}
+
+unvotes <- unvotes %>%
+  distinct()
+
+unvotes_clean <- unvotes %>%
+  mutate(
+    vote = factor(vote, levels = c("yes", "abstain", "no")) 
+  ) 
+
+
+```
+
+## Clean `roll_calls`
+
+We then cleaned the `roll_calls` dataset, by changing the column into date format. This will help us better understand how the votes are associated to the dates. 
+
+
+```{r}
+
+roll_calls <- roll_calls %>%
+  distinct()
+
+roll_calls_clean <- roll_calls %>%
+  mutate(date = as.Date(date)) 
+
+```
+
+
+
+## Clean `issues`
+
+We finally move on to cleaning the `issues` dataset, by factoring and categorising each issues, since there are only 6 issues involved in the dataset. 
+
+
+```{r}
+
+issues <- issues %>%
+  distinct()
+
+issues_clean <- issues %>%
+  mutate(issue = as.factor(issue)) 
+
+```
+
+
+## Merge Datasets
+
+Since we have 3 different types of dataframes, we decided to merge and join them to better visualise and compare the votes between each type of event. We joined the datasets together through `rcid`, which acts as a common identifier across `unvotes_clean`, `roll_calls_clean`, and `issues_clean`. By performing inner joins, we ensured that only records present in all three datasets were included, keeping our data consistent and relevant. We then selected key variables necessary for our analysis and removed columns that were not directly useful, such as `amend`, `para`, and `importantvote`. To further add on, we also removed any NA values that were inside the columns of importance, so as to ensure the consistencies of the data. To enable time-based and regional analysis, we extracted the year from the vote date and added a `continent` column by mapping each country to its corresponding continent using the `countrycode` package. This cleaned and combined dataset, `votes_combined`, provides a comprehensive view of UN voting patterns, including when and how each country voted on specific issues over time and across different continents.
+
+
+```{r}
+votes_combined <- unvotes_clean %>%
+  inner_join(roll_calls_clean, by = "rcid") %>%
+  inner_join(issues_clean, by = "rcid") %>%
+  select(-amend, -para, -importantvote) %>%
+  filter(!is.na(year), !is.na(issue), !is.na(country), !is.na(rcid), !is.na(vote))
+
+votes_combined$year <- year(as.Date(votes_combined$date))
+votes_combined$continent <- countrycode(sourcevar = votes_combined$country, origin = "country.name", destination = "continent")
+
+
+```
+
+
+To enhance our analysis with geographic grouping, we assigned each country in the dataset to its respective continent using the `countrycode` package. This allowed us to explore voting patterns at a continental level. However, some countries could not be matched due to naming inconsistencies or missing data. For instance, Czechoslovakia was considered to be a country by itself, and not part of any of the continents. To keep track of these exclusions, we created a separate list of countries with missing continent values (`NA_continent`) for reference. We then removed these unmatched entries from the dataset to ensure clean and consistent analysis. We also removed other columns that were not needed for the visualisations after, such as `short`, `country_code`,`short`, `session`, `unres`, `date`, `descr` and `short_name`, so that more focus is placed on the remaining columns for evaluation. The resulting dataset, `votes_combined_clean`, contains only records with valid continent information and is ready for further visualisation and exploration.
+
+Overall, in the final `votes_combined_clean` dataset, we can observe that voting patterns across different issues. The dataset includes 245,183 rows and covers votes from various countries, each contributing to discussions on major global issues such as `Arms control and disarmament`, `Palestinian conflict`, and `Human rights`. The votes, categorized as `yes`, `no`, and `abstain`, span several decades, providing a historical view of how different nations have responded to international resolutions over time. Notably, issues like `Arms Control and Disarmament` garnered the highest number of votes, suggesting broader engagement, while other topics had more varied participation. This detailed data enables a deeper understanding of global political dynamics and how countries align or diverge on key global concerns across different time periods.
+
+
+
+## Grouping countries into their regions
+
+```{r}
+
+votes_combined$continent <- countrycode(sourcevar = votes_combined$country, origin = "country.name", destination = "continent")
+
+# list of countries that has been excluded 
+NA_continent <- votes_combined %>%
+  filter(is.na(continent)) %>%
+  distinct(country)
+
+votes_combined_clean <- votes_combined %>%
+  filter(!is.na(continent))  %>%
+  select(rcid,country, vote, issue, year, continent)
+
+glimpse(votes_combined_clean)
+
+```
+
+To understand the distribution of voting activity across different topics, we grouped the `issues` dataset by the `issue` variable and calculated the number of unique votes (`rcid`) associated with each one. This provided a count of how many roll call votes were held per issue category. We then arranged the results in descending order to identify which issues received the most attention in terms of voting frequency. This summary helps highlight the most debated or prioritised topics in the UN over time.
+
+As shown in the summary table of issues, *Arms Control and Disarmament* received the highest number of votes across the years, with a total of 1,092 votes, followed closely by the *Palestinian Conflict* (1,061 votes) and *Human Rights* (1,015 votes). The significant gap between the most and least voted issues also prompted us to narrow the scope of our analysis. In the following visualisations, we focus on a selected set of key issues to explore in greater detail.
+
+
+## Number of votes for each issue
+```{r}
+issues %>%
+  group_by(issue) %>%
+  summarise(n_votes = n_distinct(rcid)) %>%
+  arrange(desc(n_votes)) 
+
+
+```
+
+
+
+# Visualisation 1: Trends in UN Issues Over Time 
+
+
+## Methodology:
+
+**`year`** - A continuous variable representing the year when an issue was brought up at the UN.
+
+**`issue`** - A categorical variable indicating the specific issue raised. 
+
+**`recent_cutoff`** - A recent year threshold (the past 20 years) used to filter and order issues based on their relevance.
+
+A ridge density plot (`geom_density_ridges()`) was used to visualise how the occurrence of different issues has changed over time. This displays multiple issues simultaneously while minimising clutter, making it easy to compare issues over time. Furthermore, it highlights both peaks and dips in issues brought up, allowing the viewer to quickly identify when certain issues became more or less prominent at the UN. By ordering the issues based on their relevance in the past 20 years, this plot also draws attention to currently important topics while still presenting historical context.
+
+
+```{r}
+
+issues_summary <- votes_combined_clean %>%
+  select(year, issue) %>%
+  mutate(issue = as.factor(issue))
+
+# Defining a recent year threshold (past 20 years)
+recent_cutoff <- max(issues_summary$year) - 20
+
+# Counting appearances per issue in recent years
+top_recent_issues <- issues_summary %>%
+  filter(year >= recent_cutoff) %>%
+  count(issue, name = "recent_count") %>%
+  arrange(recent_count)
+
+# Reordering the factor levels based on recent counts
+issues_summary <- issues_summary %>%
+  mutate(issue = factor(issue, levels = top_recent_issues$issue))
+
+# Plotting the visualisation
+ggplot(issues_summary, aes(x = year, y = issue, fill = issue)) +
+  geom_density_ridges(scale = 1.2, alpha = 0.8, color = "white", bandwidth = 0.6) +
+  scale_fill_viridis_d(option = "C") +
+  labs(
+    title = "Trends in UN Issues Over Time",
+    subtitle = "Density of issues brought up at the UN by year",
+    x = "Year",
+    y = "Issue",
+    caption = "Issues ordered based on their relative frequency over the past 20 years (2000-2020)"
+  ) +
+  theme_minimal(base_family = "Georgia") +
+  theme(legend.position = "none",
+        plot.caption = element_text(size = 8, color = "gray40", hjust = 0.5),
+        plot.title = element_text(size = 13, face = "bold", hjust = 0))
+
+```
+
+## Discussion on Visualisation 1
+
+The primary insight conveyed through the visualisation is how the prominence of different UN issues (`issue`) has shifted over time (`year`). Over the past 20 years, human rights have become increasingly central to UN discussions, driven by major institutional changes like the establishment of the UN Human Rights Council (UNGA Resolution 60/251, 2006) and the integration of human rights principles into global agendas such as the 2030 Sustainable Development Goals. In contrast, earlier concerns such as colonialism and economic development dominated the UN’s agenda during the mid-20th century, as seen in initiatives like the UN General Assembly Resolution 1514 (1960) on decolonization and the creation of UNCTAD (1964) to promote the economic growth of newly independent states. These trends reflect major historical and political changes, such as the wave of decolonisation and the growing global emphasis on human rights. Overall, this visualisation captures how evolving global priorities and geopolitical events have shaped the UN's focus over time.
+
+
+
+
+# Visualisation 2: World's Voting Alignment with the UN's Five Permanent Powers on “Human rights”
+
+## Methodology:
+
+**`year`**: A continuous variable representing the year when the issue was voted on at the UN.
+
+**`global_alignment_rate`**: A continuous variable representing the mean proportion of alignment between countries and a permanent power in a given year.
+
+**`power`**: A categorical variable representing one of the five permanent powers: "United States", "China", "Russia", "United Kingdom", "France".
+
+**`aligned`**: A logical value set to TRUE if a country's vote matched the power's vote, and FALSE otherwise.
+
+A time series line plot is used to visualise the average alignment rate between countries and each major power on Human Rights votes. Alignment, represented by the variable `aligned`, is defined by whether a country cast the same vote (`abstain`, `yes`, `no`) as a given power in the same roll call. The variable `global_alignment_rate` is a continuous proportion given by the calculation of average alignment of all voting countries, excluding the permanent powers. Its value ranges from 0 to 1, where 1 represents full voting alignment, while 0 represents no alignment with a permanent power in a given year. Each coloured line represents voting alignment with one of the five permanent members of the UN Security Council, and a smooth curve is applied to reduce noise and emphasise long-term trends over time. This time series line plot effectively highlights temporal shifts in global political alignment on the issue of Human Rights and allows for cross-country comparisons of influence over several decades.
+
+Although the Republic of China (Taiwan) held the UN seat for 'China' until 1971, this analysis focuses on alignment trends with the current permanent members based on their long-term and present-day influence within the United Nations. Following the adoption of UNGA Resolution 2758 (1971), which recognized the People's Republic of China (PRC) as the legitimate representative of China, we exclude pre-1971 data to maintain consistency with the present composition of the permanent members.
+
+
+```{r}
+#Filter votes related to Human Rights
+hr_votes <- votes_combined %>%
+  filter(issue == "Human rights")
+
+
+# Select votes by major powers
+powers <- c("US", "CN", "RU", "GB", "FR")
+
+power_votes <- hr_votes %>%
+  filter(country_code %in% powers) %>%
+  select(rcid, power = country_code, power_vote = vote)
+
+
+# Calculate global alignment rates by comparing each country's vote with each major power's vote
+alignment_df <- hr_votes %>%
+  filter(!country_code %in% powers) %>%  # all other countries
+  left_join(power_votes, by = "rcid") %>%
+  mutate(aligned = vote == power_vote)
+
+
+#Summarise global alignment over time for each power
+global_alignment <- alignment_df %>%
+  group_by(year, power) %>%
+  summarise(global_alignment_rate = mean(aligned, na.rm = TRUE), .groups = "drop") %>%
+  mutate(power = recode(power,
+    "US" = "United States",
+    "CN" = "China",
+    "RU" = "Russia",
+    "GB" = "United Kingdom",
+    "FR" = "France"
+  )) %>%
+  mutate(power = factor(power, levels = c(
+    "China", "Russia", "France", "United Kingdom","United States"
+  )))
+
+#Plot global alignment trends
+ggplot(global_alignment, aes(x = year, y = global_alignment_rate, color = power)) +
+  geom_line(size = 0.5, alpha = 0.35) +
+  geom_smooth(method = "gam", formula = y ~ s(x), se = FALSE, size = 1.2) +
+  labs(
+    title = "Global Alignment with Permanent Powers on Human Rights Votes",
+    x = "Year",
+    y = "Average Alignment Rate",
+    color = "Permanent Power",
+    caption = "Based on UN General Assembly voting records"
+  ) +
+  scale_color_manual(
+    values = c("United States" = "#1f77b4", "China" = "#d62728", "Russia" = "#9467bd",
+               "United Kingdom" = "#2ca02c", "France" = "#ff7f0e")
+  ) + 
+  scale_y_continuous(breaks = seq(0, 1, 0.25), limits = c(0, 1)) +
+  scale_x_continuous(breaks = seq(1940, 2020, 10), limits = c(1946, 2020)) +
+  theme_minimal(base_family = "Georgia") +
+  theme(
+    plot.title = element_text(size = 13, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 8, color = "gray40", hjust = 0.5),
+    plot.caption = element_text(size = 10, hjust = 1),
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10),
+    panel.border = element_blank(),
+    plot.background = element_rect(fill = "white", color = "white")
+  )
+
+```
+
+## Discussion on Visualisation 2
+
+The visualisation shows how global alignment on human rights votes has evolved to reflect the growing influence of non-Western actors. During the 1970s, global alignment with China and Russia (then the USSR) peaked as newly decolonised states joined the UN and supported their anti-colonial, pro-sovereignty stances, China’s admission to the UN in 1971 and the USSR’s backing of the New International Economic Order bolstered their appeal to the Global South (Legge, 2023). Since the 2000s, countries have increasingly aligned with China and Russia, as both promote non-interventionist interpretations of human rights, often at odds with Western liberal norms (Wientzek, 2022). Conversely, alignment with the United States has steadily declined, partly due to its frequent opposition to economic rights, criticism of Israel, and use of human rights rhetoric to justify highly controversial military interventions, such as in the 2003 Iraq War (Choi, S.-W., James, 2016). Meanwhile, France and the UK show more moderate, stable alignment, reflecting their commitment to human rights while maintaining strategic pragmatism (Wiki, 2025), positioning them squarely in the middle-ground between the US and China-Russia blocs.
+
+
+
+# Visualisation 3: Voting Pattern for Each Country on “Arms control and disarmament”
+
+## Methodology:
+
+**`percent_yes`**: A continuous variable representing the proportion of "Yes" votes out of all votes casted by a country
+
+**`country`**: A categorical variable with the names of each country
+
+A choropleth map is used to visualise the proportion of "Yes" votes out of all the votes each country has casted regarding the issue on arms control and disarmament, which is the second most raised issue in the recent years, as seen in visualisation 1. For each country, the votes, `abstain`, `yes`, and `no` add up to 100% of the `total_votes` for that country. The colour gradient, from a pale yellow to dark blue, shows the strength of each country’s voting alignment with the issue, from highest to lowest `percent_yes` votes respectively. A choropleth map is chosen to help display geopolitical patterns and cross-country comparisons in voting behavior as it allows for quick identification of regions or countries with high or low support on the issue. 
+
+```{r}
+
+# Proportions of Votes for Arms control and disarmament
+arms_control_vote_proportions <- votes_combined_clean %>%
+  filter(issue == "Arms control and disarmament") %>%
+  group_by(country) %>%
+  summarise(
+    total_votes = n(),
+    yes = sum(vote == "yes"),
+    no = sum(vote == "no"),
+    abstain = sum(vote == "abstain")
+  ) %>%
+  mutate(
+    percent_yes = yes*100 / total_votes,
+    percent_no = no*100/ total_votes,
+    percent_abstain = abstain*100 / total_votes
+  ) %>%
+  mutate(country = countrycode(country, origin = 'country.name', destination = 'country.name')) #standardise country names 
+
+# Load world map data
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Standardise country name
+world <- world %>%
+  mutate(name = countrycode(name, origin = 'country.name', destination = 'country.name')) #
+
+# Merge map with voting data and exclude Antartica(that has no votes)
+world_votes <- world %>%
+  left_join(arms_control_vote_proportions, by = c("name" = "country")) %>%
+  filter(name != "Antarctica")  
+
+# Plotting the visualisation
+ggplot(data = world_votes) +
+  geom_sf(aes(fill = percent_yes)) +
+  scale_fill_distiller(palette = "YlGnBu", na.value = "grey80") +
+  coord_sf(expand = FALSE) +
+  labs(
+    title = "Proportion of 'Yes' Votes on Arms control and disarmament by Country",
+    subtitle = "Based on UN General Assembly voting records",
+    fill = "Yes Vote %"
+  ) +
+  theme_minimal(base_family = "Georgia") +
+  theme(
+    plot.title = element_text(size = 13, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 11, hjust = 0.5),
+    plot.caption = element_text(size = 10, hjust = 1),
+    legend.position = "right",
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10),
+    panel.grid = element_blank(),
+    panel.border = element_blank(),
+    plot.background = element_rect(fill = "white", color = "white"),
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+  ) 
+
+```
+
+## Discussion on Visualisation 3
+
+This visualisation reveals geopolitical patterns on the issue of arms control and disarmament with many developing countries in Africa, South America and parts of Asia showing high support, with larger proportions of “Yes” votes. Meanwhile, major military powers, such as the United States and Russia, and Western allies, such as France and Canada, show lower levels of agreement, with smaller proportions of “Yes” votes. The variation of voting alignment reflects differing national priorities. Many developing countries, which often do not have a strong arms industry, tend to vote in favor of arms control as they may view disarmament as a step towards peace and security (Rust, 2025). On the other hand, countries with major military capabilities or arms industries, such as the United States and Russia, are often more hesitant to support disarmament as it may impact their national defense capabilities or arms exports (G. Neuneck, 2019). Voting patterns can also reflect broader geopolitical alignments, such as NATO members or close allies of the major military powers possibly voting in coordination by showing less support for the measures (Johnson, 2024).
+
+
+# 4. Overall Discussion Summary
+
+To answer our initial question:
+
+```bash
+"What insights can be uncovered from voting patterns in the UN General Assembly across countries, time periods, and vital issues?"
+```
+
+Our visualisations trace how global political priorities have evolved over time and reveal how countries align on key issues. We first observed how the prominence of different UN issues has shifted across decades: while colonialism and economic development dominated earlier periods, human rights emerged as a central focus in the 21st century, shaped by institutional reforms and global agendas such as the Sustainable Development Goals. This prompted and encouraged us to further investigate the issue of human rights, where we uncovered changing patterns of global alignment. We found that support has increasingly tilted towards the China-Russia bloc, which promotes a sovereignty-focused stance, while alignment with the US support has declined, as more countries grow critical of how it applies human rights standards differently in different situations. Building on these insights, we also examined arms control and disarmament, the next most prominent issue. Here, a clear divide emerges and can be seen, where developing countries largely support disarmament efforts, while military powers like the US and Russia show more resistance, which are influenced by their strategic interests. Overall, our project highlights how voting trends of UNGA are not only shaped by various issues and historical context, but also by shifting geopolitical alliances and national priorities.
+
+
+
+# 5. Teamwork
+
+Each team member contributed to different aspects of the project, with all of us actively involved in data cleaning and graph visualisation. Si Ying was in charge of data cleaning and was responsible for writing and editing the introduction. Amelia focused on creating the first visualisation and wrote the accompanying discussion for that plot. Chu Ting handled the second visualisation and contributed to drawing inferences and writing its discussion. Whitney worked on the final visualisation, further evaluating the results and discussing potential insights from the plot.
+
+As a team, we collaboratively reviewed the report and code to ensure consistency, cohesiveness, and a smooth flow between sections.
+
+
+
+# 6. References
+
+Choi, S.-W., & James, P. (2016). Why Does the United States Intervene Abroad? Democracy, Human Rights Violations, and Terrorism. The Journal of Conflict Resolution, 60(5), 899–926. http://www.jstor.org/stable/24755900
+
+France–United Kingdom relations (2025) Wikipedia. Available at: https://en.wikipedia.org/wiki/France%E2%80%93United_Kingdom_relations (Accessed: 19 April 2025).
+
+International Federation for the Protection of the Rights of Ethnic, Religious, Linguistic and Other Minorities. (2006). Implementation of General Assembly Resolution 60/251 of 15 March 2006 entitled “Human Rights Council” : United Nations. https://digitallibrary.un.org/record/577713
+
+Johnson, R. (2024). The Arms Control Agenda at the UN: Breaking New Ground or Breaking Old Habits? | Arms Control Association. Armscontrol.org. https://www.armscontrol.org/act/1997-01/features/arms-control-agenda-un-breaking-new-ground-or-breaking-old-habits
+
+Legge, D. (2023) The New International Economic Order (NIEO). Available at: https://www.davidglegge.me/sites/default/files/NIEO_230228.pdf (Accessed: 19 April 2025).
+
+Neuneck, G. (2019). The Deep Crisis of Nuclear Arms Control and Disarmament: The State of Play and The Challenges. Journal for Peace and Nuclear Disarmament, 2(2). https://doi.org/10.1080/25751654.2019.1701796
+
+Rust, R. (2025, April 8). Neither Global Development nor Nuclear Disarmament Happen Unilaterally. The Equation. https://blog.ucs.org/robert-rust/neither-global-development-nor-nuclear-disarmament-happen-unilaterally/
+
+United Nations. (1960). General Assembly resolution 1514 (XV). In United Nations Human Rights. https://www.ohchr.org/en/instruments-mechanisms/instruments/declaration-granting-independence-colonial-countries-and-peoples
+
+Wientzek, O. (2022). Cooperation Between Russia and China in Multilateral Organizations: A Tactical or a Strategic Alliance?. In: Kirchberger, S., Sinjen, S., Wörmer, N. (eds) Russia-China Relations. Global Power Shift. Springer, Cham. https://doi.org/10.1007/978-3-030-97012-3_12
+
+
